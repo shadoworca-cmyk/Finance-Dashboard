@@ -1,7 +1,6 @@
 import { PublicClientApplication } from "https://cdn.jsdelivr.net/npm/@azure/msal-browser@5/+esm";
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.min.mjs";
 import JSZip from "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm";
-import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.5.0/+esm";
 pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.worker.min.mjs";
 
 const FOLDER_PATH = "Finance Dashboard/Statements";
@@ -19,34 +18,15 @@ const nav = [
 
 let msal = null, account = null;
 let tx = JSON.parse(localStorage.getItem("finance.tx.v2") || "[]");
-let charts = {};
-let drillPredicate = null;
-let drillLabel = "";
-function getClientId(){
- return localStorage.getItem("finance.clientId") || localStorage.getItem("finance.clientId.backup") || "";
-}
-function setClientId(id){
- setClientId(id);
- localStorage.setItem("finance.clientId.backup",id);
-}
-
+let drillPredicate=null, drillLabel="";
 
 const $ = id => document.getElementById(id);
-function safeEl(id){const el=$(id); if(!el) console.warn("Missing element:",id); return el;}
 const money = n => (n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 
 function buildNav(){
- const hosts=[$("sideNav"),$("mobileNav")].filter(Boolean);
- for(const host of hosts){
-  host.innerHTML="";
-  nav.forEach(([id,label])=>{
-   const b=document.createElement("button");
-   b.textContent=label;b.dataset.tab=id;
-   if(id==="overview")b.classList.add("active");
-   b.onclick=()=>show(id);
-   host.appendChild(b);
-  });
+ for(const host of [$("sideNav"),$("mobileNav")]){
+  nav.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.dataset.tab=id;if(id==="overview")b.classList.add("active");b.onclick=()=>show(id);host.appendChild(b)})
  }
 }
 function show(id){
@@ -101,92 +81,74 @@ function selectedMonthKey(){
  const d=new Date(v+" 1");
  return Number.isNaN(d.getTime())?null:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
 }
-function txForSelectedMonth(){
- const key=selectedMonthKey();
- return key?tx.filter(t=>String(t.date||"").startsWith(key)):tx;
-}
 function refreshMonthOptions(){
- const keys=[...new Set(tx.map(t=>String(t.date||"").slice(0,7)).filter(x=>/^\d{4}-\d{2}$/.test(x)))].sort().reverse();
+ const keys=[...new Set(tx.map(t=>String(t.date||"").slice(0,7)).filter(k=>/^\d{4}-\d{2}$/.test(k)))].sort().reverse();
  if(!keys.length)return;
  const current=$("monthSelect").value;
- $("monthSelect").innerHTML=keys.map(k=>{
-   const [y,m]=k.split("-").map(Number);
-   return `<option value="${new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"})}">${new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"})}</option>`;
- }).join("");
+ $("monthSelect").innerHTML=keys.map(k=>{const[y,m]=k.split("-").map(Number);const label=new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"});return `<option>${label}</option>`}).join("");
  if([...$("monthSelect").options].some(o=>o.value===current))$("monthSelect").value=current;
+}
+function monthTransactions(){
+ const key=selectedMonthKey();return key?tx.filter(t=>String(t.date||"").startsWith(key)):tx;
 }
 function render(){
  refreshMonthOptions();
- const monthTx=txForSelectedMonth();
- const expenses=monthTx.filter(t=>t.type==="Expense"), income=monthTx.filter(t=>t.type==="Income");
+ const mt=monthTransactions();
+ const expenses=mt.filter(t=>t.type==="Expense"), income=mt.filter(t=>t.type==="Income");
  const spend=expenses.reduce((a,t)=>a+Math.abs(t.amount),0), inc=income.reduce((a,t)=>a+Math.abs(t.amount),0), net=inc-spend;
  $("incomeKpi").textContent=money(inc);$("spendKpi").textContent=money(spend);$("netKpi").textContent=money(net);$("netKpi").className="big "+(net>=0?"good":"bad");$("rateKpi").textContent=(inc?net/inc*100:0).toFixed(1)+"%";
-
- const cats={};expenses.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));
- renderOverviewCategoryChart(cats);
- renderAnalyticsCharts();
+ renderCharts(mt);
 
  const q=($("search")?.value||"").toLowerCase(), f=$("filter")?.value||"", cf=$("categoryFilter")?.value||"";
- const rows=monthTx.filter(t=>(!q||(t.description+" "+t.category+" "+t.source).toLowerCase().includes(q))&&(!f||t.type===f)&&(!cf||t.category===cf)).sort((a,b)=>b.date.localeCompare(a.date));
+ const rows=mt.filter(t=>(!q||(t.description+" "+t.category+" "+t.source).toLowerCase().includes(q))&&(!f||t.type===f)&&(!cf||t.category===cf)).sort((a,b)=>b.date.localeCompare(a.date));
  $("txBody").innerHTML=rows.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.description)}</td><td>${esc(t.category)}</td><td><span class="badge ${t.type.toLowerCase()}">${t.type}</span></td><td>${t.shared?'<span class="badge shared">Shared</span>':""}</td><td>${esc(t.source)}</td><td class="amount ${t.amount>0?"good":""}">${money(t.amount)}</td></tr>`).join("");
-
- const categories=[...new Set(monthTx.map(t=>t.category).filter(Boolean))].sort();
- const sel=$("categoryFilter"); if(sel){const old=sel.value;sel.innerHTML='<option value="">All categories</option>'+categories.map(c=>`<option>${esc(c)}</option>`).join("");if(categories.includes(old))sel.value=old}
-
- renderShared(expenses);renderReview();
- if(drillPredicate)renderDrilldown();
+ const cats=[...new Set(mt.map(t=>t.category).filter(Boolean))].sort();
+ if($("categoryFilter")){const old=$("categoryFilter").value;$("categoryFilter").innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join("");if(cats.includes(old))$("categoryFilter").value=old}
+ renderShared(expenses);renderReview();if(drillPredicate)renderDrill();
 }
 function renderBars(cats){
  const arr=Object.entries(cats).sort((a,b)=>b[1]-a[1]);const max=Math.max(1,...arr.map(x=>x[1]));
  $("categoryBars").innerHTML=arr.length?arr.map(([n,v],i)=>`<div class="barrow"><span>${esc(n)}</span><div class="track"><div class="bar ${i===1?"gold":""}" style="width:${v/max*100}%"></div></div><b>${money(v)}</b></div>`).join(""):`<div class="notice">Import statements to populate this view.</div>`;
 }
 
-function chartDestroy(name){if(charts[name]){charts[name].destroy();delete charts[name]}}
-function chartColors(n){
- const palette=["#5a3b73","#7a5a92","#9a7caf","#b69dc5","#d0bdd9","#68456e","#8b6b86","#ac8fa4","#c8aebc","#e0ccd5"];
- return Array.from({length:n},(_,i)=>palette[i%palette.length]);
+const purple=["#3b1d4a","#573168","#704781","#896099","#a27ab0","#bb95c6","#d2b2d9","#6b4c78","#8d6d99","#ad91b6"];
+function sumBy(rows,key){const o={};rows.forEach(t=>o[t[key]]=(o[t[key]]||0)+Math.abs(t.amount));return o}
+function donut(elId,legendId,entries,labelPrefix){
+ const el=$(elId), leg=$(legendId);if(!el)return;
+ if(!entries.length){el.innerHTML='<div class="notice">No spending data for this period.</div>';if(leg)leg.innerHTML="";return}
+ const total=entries.reduce((a,x)=>a+x[1],0),cx=150,cy=130,r=82,sw=46,C=2*Math.PI*r;let offset=0;
+ const circles=entries.map(([name,val],i)=>{const frac=val/total,dash=frac*C, gap=C-dash;const html=`<circle data-name="${esc(name)}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${purple[i%purple.length]}" stroke-width="${sw}" stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" style="cursor:pointer"/>`;offset+=dash;return html}).join("");
+ el.innerHTML=`<svg viewBox="0 0 300 260" role="img">${circles}<text x="${cx}" y="${cy-4}" text-anchor="middle" font-size="12" fill="#6b7280">Total</text><text x="${cx}" y="${cy+20}" text-anchor="middle" font-size="21" font-weight="800" fill="#18222d">${money(total)}</text></svg>`;
+ el.querySelectorAll("circle[data-name]").forEach(c=>c.onclick=()=>{const n=c.dataset.name;setDrill(`${labelPrefix}: ${n}`,t=>t.type==="Expense"&&t.category===n&&monthTransactions().includes(t));show("analytics")});
+ if(leg)leg.innerHTML=entries.map(([n,v],i)=>`<button class="legendchip" data-name="${esc(n)}"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${purple[i%purple.length]};margin-right:5px"></span>${esc(n)} ${money(v)}</button>`).join("");
+ if(leg)leg.querySelectorAll("button").forEach(b=>b.onclick=()=>{const n=b.dataset.name;setDrill(`${labelPrefix}: ${n}`,t=>t.type==="Expense"&&t.category===n&&monthTransactions().includes(t));show("analytics")});
 }
-function renderOverviewCategoryChart(cats){
- const el=$("overviewCategoryChart");if(!el)return;chartDestroy("overviewCategory");
- const labels=Object.keys(cats), data=Object.values(cats);
- if(!labels.length)return;
- charts.overviewCategory=new Chart(el,{type:"doughnut",data:{labels,datasets:[{data,backgroundColor:chartColors(labels.length),borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const cat=labels[els[0].index];setDrill(`Category: ${cat}`,t=>t.type==="Expense"&&t.category===cat);show("analytics")}}}});
+function bars(elId,entries,kind){
+ const el=$(elId);if(!el)return;if(!entries.length){el.innerHTML='<div class="notice">No data for this period.</div>';return}
+ const max=Math.max(...entries.map(x=>x[1]),1),w=560,rowH=28,left=165,right=75,h=entries.length*rowH+20;
+ el.innerHTML=`<svg viewBox="0 0 ${w} ${h}">${entries.map(([name,val],i)=>{const bw=(w-left-right)*(val/max);return `<text x="${left-8}" y="${i*rowH+18}" text-anchor="end" font-size="11" fill="#4b5563">${esc(name.length>24?name.slice(0,22)+"…":name)}</text><rect data-name="${esc(name)}" x="${left}" y="${i*rowH+6}" width="${Math.max(2,bw)}" height="15" rx="5" fill="${purple[i%purple.length]}" style="cursor:pointer"/><text x="${left+bw+7}" y="${i*rowH+18}" font-size="10" fill="#6b7280">${money(val)}</text>`}).join("")}</svg>`;
+ el.querySelectorAll("rect[data-name]").forEach(r=>r.onclick=()=>{const n=r.dataset.name;if(kind==="merchant")setDrill(`Merchant: ${n}`,t=>t.type==="Expense"&&t.description===n&&monthTransactions().includes(t));else setDrill(`Source: ${n}`,t=>t.type==="Expense"&&t.source===n&&monthTransactions().includes(t))});
 }
-function monthlySeries(){
- const buckets={};
- tx.filter(t=>t.type==="Expense"||t.type==="Income").forEach(t=>{
-   const k=String(t.date||"").slice(0,7);if(!/^\d{4}-\d{2}$/.test(k))return;
-   buckets[k]??={income:0,spending:0};
-   if(t.type==="Income")buckets[k].income+=Math.abs(t.amount);else buckets[k].spending+=Math.abs(t.amount);
- });
- return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>{const[y,m]=k.split("-").map(Number);return{key:k,label:new Date(y,m-1,1).toLocaleString(undefined,{month:"short",year:"2-digit"}),...v}});
+function monthlyLine(elId){
+ const el=$(elId);if(!el)return;const buckets={};tx.filter(t=>t.type==="Expense"||t.type==="Income").forEach(t=>{const k=String(t.date||"").slice(0,7);if(!/^\d{4}-\d{2}$/.test(k))return;buckets[k]??={income:0,spend:0};if(t.type==="Income")buckets[k].income+=Math.abs(t.amount);else buckets[k].spend+=Math.abs(t.amount)});
+ const rows=Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0]));if(!rows.length){el.innerHTML='<div class="notice">Import multiple months to see the trend.</div>';return}
+ const W=600,H=270,L=48,R=18,T=20,B=46,max=Math.max(1,...rows.flatMap(x=>[x[1].income,x[1].spend]));
+ const x=i=>L+(rows.length===1?(W-L-R)/2:i*(W-L-R)/(rows.length-1)), y=v=>T+(H-T-B)*(1-v/max);
+ const line=key=>rows.map((r,i)=>`${i?"L":"M"} ${x(i)} ${y(r[1][key])}`).join(" ");
+ el.innerHTML=`<svg viewBox="0 0 ${W} ${H}"><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#d1d5db"/><path d="${line("income")}" fill="none" stroke="#573168" stroke-width="3"/><path d="${line("spend")}" fill="none" stroke="#b18a52" stroke-width="3"/>${rows.map((r,i)=>{const[yv,mv]=r[0].split("-").map(Number),lab=new Date(yv,mv-1,1).toLocaleString(undefined,{month:"short"});return `<g data-key="${r[0]}" style="cursor:pointer"><circle cx="${x(i)}" cy="${y(r[1].income)}" r="5" fill="#573168"/><circle cx="${x(i)}" cy="${y(r[1].spend)}" r="5" fill="#b18a52"/><text x="${x(i)}" y="${H-18}" text-anchor="middle" font-size="10" fill="#6b7280">${lab}</text></g>`}).join("")}<text x="${L}" y="12" font-size="10" fill="#573168">Income</text><text x="${L+48}" y="12" font-size="10" fill="#b18a52">Spending</text></svg>`;
+ el.querySelectorAll("g[data-key]").forEach(g=>g.onclick=()=>{const k=g.dataset.key;const[yv,mv]=k.split("-").map(Number);setDrill(`Month: ${new Date(yv,mv-1,1).toLocaleString(undefined,{month:"long",year:"numeric"})}`,t=>String(t.date||"").startsWith(k)&&(t.type==="Expense"||t.type==="Income"))});
 }
-function renderAnalyticsCharts(){
- const monthTx=txForSelectedMonth(), exp=monthTx.filter(t=>t.type==="Expense");
-
- const series=monthlySeries(); chartDestroy("monthly");
- if($("monthlyChart")&&series.length)charts.monthly=new Chart($("monthlyChart"),{type:"line",data:{labels:series.map(x=>x.label),datasets:[{label:"Income",data:series.map(x=>x.income),borderColor:"#5a3b73",backgroundColor:"#5a3b73",tension:.25},{label:"Spending",data:series.map(x=>x.spending),borderColor:"#b18a52",backgroundColor:"#b18a52",tension:.25}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const key=series[els[0].index].key;setDrill(`Month: ${series[els[0].index].label}`,t=>String(t.date||"").startsWith(key)&&(t.type==="Expense"||t.type==="Income"))}}}});
-
- const cats={};exp.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));const catEntries=Object.entries(cats).sort((a,b)=>b[1]-a[1]);
- chartDestroy("category");
- if($("categoryChart")&&catEntries.length)charts.category=new Chart($("categoryChart"),{type:"doughnut",data:{labels:catEntries.map(x=>x[0]),datasets:[{data:catEntries.map(x=>x[1]),backgroundColor:chartColors(catEntries.length)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const cat=catEntries[els[0].index][0];setDrill(`Category: ${cat}`,t=>t.type==="Expense"&&t.category===cat&&txForSelectedMonth().includes(t))}}}});
-
- const merchants={};exp.forEach(t=>merchants[t.description]=(merchants[t.description]||0)+Math.abs(t.amount));const merch=Object.entries(merchants).sort((a,b)=>b[1]-a[1]).slice(0,10).reverse();
- chartDestroy("merchant");
- if($("merchantChart")&&merch.length)charts.merchant=new Chart($("merchantChart"),{type:"bar",data:{labels:merch.map(x=>x[0]),datasets:[{label:"Spending",data:merch.map(x=>x[1]),backgroundColor:"#7a5a92"}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},onClick:(e,els)=>{if(els.length){const m=merch[els[0].index][0];setDrill(`Merchant: ${m}`,t=>t.type==="Expense"&&t.description===m&&txForSelectedMonth().includes(t))}}}});
-
- const sources={};exp.forEach(t=>sources[t.source]=(sources[t.source]||0)+Math.abs(t.amount));const src=Object.entries(sources).sort((a,b)=>b[1]-a[1]);
- chartDestroy("source");
- if($("sourceChart")&&src.length)charts.source=new Chart($("sourceChart"),{type:"bar",data:{labels:src.map(x=>x[0]),datasets:[{label:"Spending",data:src.map(x=>x[1]),backgroundColor:chartColors(src.length)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},onClick:(e,els)=>{if(els.length){const s=src[els[0].index][0];setDrill(`Source: ${s}`,t=>t.type==="Expense"&&t.source===s&&txForSelectedMonth().includes(t))}}}});
+function renderCharts(mt){
+ const exp=mt.filter(t=>t.type==="Expense"),cats=Object.entries(sumBy(exp,"category")).sort((a,b)=>b[1]-a[1]);
+ donut("overviewCategoryChart","overviewLegend",cats,"Category");donut("categoryChart","categoryLegend",cats,"Category");monthlyLine("monthlyChart");
+ const merch=Object.entries(sumBy(exp,"description")).sort((a,b)=>b[1]-a[1]).slice(0,9);bars("merchantChart",merch,"merchant");
+ const src=Object.entries(sumBy(exp,"source")).sort((a,b)=>b[1]-a[1]).slice(0,9);bars("sourceChart",src,"source");
 }
-function setDrill(label,predicate){drillLabel=label;drillPredicate=predicate;renderDrilldown()}
-function renderDrilldown(){
+function setDrill(label,pred){drillLabel=label;drillPredicate=pred;renderDrill()}
+function renderDrill(){
  const rows=tx.filter(drillPredicate||(()=>false)).sort((a,b)=>b.date.localeCompare(a.date));
  $("drillTitle").textContent=drillLabel||"Drill-down";$("drillSub").textContent=rows.length?"Underlying transactions for this selection.":"No matching transactions.";
  const total=rows.reduce((a,t)=>a+Math.abs(t.amount),0);$("drillCount").textContent=rows.length;$("drillTotal").textContent=money(total);$("drillAvg").textContent=money(rows.length?total/rows.length:0);
- const cats=[...new Set(rows.map(t=>t.category).filter(Boolean))].sort();
- $("drillChips").innerHTML=cats.map(c=>`<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join("");
- $("drillChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{const cat=b.dataset.cat;const base=drillPredicate;setDrill(`${drillLabel.split(" • ")[0]} • ${cat}`,t=>base(t)&&t.category===cat)});
  $("drillBody").innerHTML=rows.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.description)}</td><td>${esc(t.category)}</td><td>${esc(t.source)}</td><td class="amount">${money(t.amount)}</td></tr>`).join("");
 }
 
@@ -204,7 +166,7 @@ function renderReview(){
  $("reviewList").innerHTML=items.length?items.map(t=>`<div class="row"><div><b>${esc(t.description)}</b><div class="meta">${esc(t.date)} • ${esc(t.source)}</div></div><div><span class="badge review">Needs Review</span> &nbsp; <b>${money(t.amount)}</b></div></div>`).join(""):`<div class="notice">Nothing waiting for review.</div>`;
 }
 async function initMsal(){
- const clientId=getClientId();
+ const clientId=localStorage.getItem("finance.clientId")||"";
  $("clientId").value=clientId;
  $("redirectUri").textContent=location.href.split("#")[0].split("?")[0];
  if(!clientId)return;
@@ -477,31 +439,13 @@ async function syncAll(){
  $("syncAllBtn").disabled=false;$("syncBtn").disabled=false;
 }
 
-$("search")?.addEventListener("input",render);$("filter")?.addEventListener("change",render);$("categoryFilter")?.addEventListener("change",render);$("monthSelect")?.addEventListener("change",render);
-if($("clearDrill"))$("clearDrill").onclick=()=>{drillPredicate=null;drillLabel="";$("drillTitle").textContent="Drill-down";$("drillSub").textContent="Choose a chart segment, month, KPI, or category.";$("drillBody").innerHTML="";$("drillCount").textContent="0";$("drillTotal").textContent="$0.00";$("drillAvg").textContent="$0.00";$("drillChips").innerHTML=""};
-if($("incomeCard"))$("incomeCard").onclick=()=>{const key=selectedMonthKey();setDrill("Income",t=>t.type==="Income"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-if($("spendCard"))$("spendCard").onclick=()=>{const key=selectedMonthKey();setDrill("Spending",t=>t.type==="Expense"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-if($("netCard"))$("netCard").onclick=()=>{const key=selectedMonthKey();setDrill("Cash flow activity",t=>(t.type==="Income"||t.type==="Expense")&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-if($("signBtn"))$("signBtn").onclick=sign;if($("syncBtn"))$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};if($("browseBtn"))$("browseBtn").onclick=listDrive;if($("syncAllBtn"))$("syncAllBtn").onclick=syncAll;
-if($("localBtn"))$("localBtn").onclick=()=>$("localPicker").click();if($("localPicker"))$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
-if($("saveConfig"))$("saveConfig").onclick=()=>{const id=$("clientId").value.trim();setClientId(id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
-if($("clearData"))$("clearData").onclick=()=>{if(confirm("Clear locally cached imported transactions?")){tx=[];save()}};
-
-
-async function startApp(){
- try{
-   buildNav();
-   render();
-   await initMsal();
- }catch(e){
-   console.error("Finance Dashboard startup failed",e);
-   const box=$("fatalError");
-   if(box){
-     box.style.display="block";
-     box.innerHTML=`<b>Dashboard startup error.</b><br>${esc(e?.message||String(e))}`;
-   }
-   // Ensure navigation still exists even if auth/chart initialization fails.
-   try{buildNav()}catch{}
- }
-}
-startApp();
+$("search").addEventListener("input",render);$("filter").addEventListener("change",render);$("categoryFilter").addEventListener("change",render);$("monthSelect").addEventListener("change",render);
+$("clearDrill").onclick=()=>{drillPredicate=null;drillLabel="";$("drillTitle").textContent="Drill-down";$("drillSub").textContent="Tap a chart, KPI, merchant, source, or category.";$("drillCount").textContent="0";$("drillTotal").textContent="$0.00";$("drillAvg").textContent="$0.00";$("drillBody").innerHTML=""};
+$("incomeCard").onclick=()=>{const k=selectedMonthKey();setDrill("Income",t=>t.type==="Income"&&(!k||String(t.date||"").startsWith(k)));show("analytics")};
+$("spendCard").onclick=()=>{const k=selectedMonthKey();setDrill("Spending",t=>t.type==="Expense"&&(!k||String(t.date||"").startsWith(k)));show("analytics")};
+$("netCard").onclick=()=>{const k=selectedMonthKey();setDrill("Cash flow",t=>(t.type==="Income"||t.type==="Expense")&&(!k||String(t.date||"").startsWith(k)));show("analytics")};
+$("signBtn").onclick=sign;$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};$("browseBtn").onclick=listDrive;$("syncAllBtn").onclick=syncAll;
+$("localBtn").onclick=()=>$("localPicker").click();$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
+$("saveConfig").onclick=()=>{const id=$("clientId").value.trim();localStorage.setItem("finance.clientId",id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
+$("clearData").onclick=()=>{if(confirm("Clear locally cached imported transactions?")){tx=[];save()}};
+buildNav();render();await initMsal();

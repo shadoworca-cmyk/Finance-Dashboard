@@ -21,9 +21,9 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 .setup{max-width:720px;margin:40px auto}.setup h2{margin-top:0}.field{display:grid;gap:6px;margin:12px 0}.field label{font-size:12px;font-weight:800;color:#59626d}.field input{width:100%}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f3f5f7;border:1px solid var(--line);padding:10px;border-radius:10px;word-break:break-all;font-size:12px}
 .notice{font-size:12px;color:var(--muted);line-height:1.5}
 .clickable{cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}.clickable:hover{transform:translateY(-1px);box-shadow:0 9px 26px #1d355718}
-.chartbox{position:relative;height:280px}.chartbox.small{height:235px}
+.chartbox{height:285px;display:flex;align-items:center;justify-content:center;overflow:hidden}.chartbox svg{width:100%;height:100%}
+.legendchips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.legendchip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:750;cursor:pointer}
 .drill{margin-top:12px}.drill-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
-.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 9px;font-size:11px;font-weight:750;cursor:pointer}.chip.active{background:#efe7f4;border-color:#cdb8db;color:#56356a}
 .statline{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0}.statmini{background:#f8fafb;border:1px solid var(--line);border-radius:12px;padding:11px}.statmini b{display:block;font-size:18px;margin-top:3px}
 .househero{padding:14px;border-radius:14px;background:#f5f9fc;border:1px solid #d9e7f1}.househero strong{display:block;font-size:23px;margin-top:4px}
 @media(max-width:950px){.app{grid-template-columns:1fr}.side{display:none}.mobile{display:flex;position:sticky;top:0;z-index:20;background:linear-gradient(90deg,#21102d 0%,#60447a 100%);padding:7px;gap:5px;overflow:auto}.mobile button{white-space:nowrap}.main{padding:16px 13px 42px}.grid4{grid-template-columns:repeat(2,1fr)}}
@@ -33,8 +33,8 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 <body>
 <div class="mobile" id="mobileNav"></div>
 <div class="app">
-<aside class="side"><div class="brand">Finance Dashboard<small>OneDrive-connected V4.1</small></div><div class="nav" id="sideNav"></div></aside>
-<main class="main"><div id="fatalError" class="status bad" style="display:none;margin-bottom:12px"></div>
+<aside class="side"><div class="brand">Finance Dashboard<small>OneDrive-connected V4.2</small></div><div class="nav" id="sideNav"></div></aside>
+<main class="main">
 <div class="top"><div><h1 id="title">Overview</h1><div class="sub" id="subtitle">Monthly financial snapshot</div></div><div class="actions"><select id="monthSelect" class="btn"><option>August 2026</option></select><button class="btn" id="syncBtn" disabled>Sync OneDrive</button><button class="btn primary" id="signBtn">Connect Microsoft</button></div></div>
 
 <section class="tab active" id="overview">
@@ -44,25 +44,23 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 <div class="card clickable" id="netCard"><div class="label">Net Retained</div><div class="big good" id="netKpi">$0.00</div><div class="meta">Income minus expenses</div></div>
 <div class="card"><div class="label">Savings Rate</div><div class="big" id="rateKpi">0.0%</div><div class="meta">Based on net retained</div></div>
 </div>
-<div class="grid2"><div class="card"><h3>Spending by Category</h3><div class="chartbox small"><canvas id="overviewCategoryChart"></canvas></div><div class="notice">Tap a slice to drill into that category.</div></div><div class="card"><h3>Data Status</h3><div id="connectionStatus" class="status warn">Not connected to OneDrive yet.</div><div class="filelist" id="recentFiles"></div></div></div>
+<div class="grid2"><div class="card"><h3>Spending by Category</h3><div class="chartbox" id="overviewCategoryChart"></div><div class="legendchips" id="overviewLegend"></div><div class="notice">Tap a segment or category to drill down.</div></div><div class="card"><h3>Data Status</h3><div id="connectionStatus" class="status warn">Not connected to OneDrive yet.</div><div class="filelist" id="recentFiles"></div></div></div>
 <div class="grid2"><div class="card"><h3>Shared Household</h3><div id="sharedRows"></div><div class="househero"><span class="label">Settlement</span><strong id="settlement">No shared expenses loaded</strong><div class="notice">Reimbursements are transfers, not income or expense.</div></div></div><div class="card"><h3>Needs Attention</h3><div id="reviewSummary" class="status">No transactions loaded.</div></div></div>
 </section>
 
 <section class="tab" id="analytics">
 <div class="grid2">
-  <div class="card"><h3>Income vs Spending by Month</h3><div class="chartbox"><canvas id="monthlyChart"></canvas></div><div class="notice">Tap a month to drill into its transactions.</div></div>
-  <div class="card"><h3>Spending Mix</h3><div class="chartbox"><canvas id="categoryChart"></canvas></div><div class="notice">Tap a category to drill down.</div></div>
+  <div class="card"><h3>Income vs Spending by Month</h3><div class="chartbox" id="monthlyChart"></div><div class="notice">Tap a month to drill into that month's activity.</div></div>
+  <div class="card"><h3>Spending Mix</h3><div class="chartbox" id="categoryChart"></div><div class="legendchips" id="categoryLegend"></div></div>
 </div>
 <div class="grid2">
-  <div class="card"><h3>Top Merchants</h3><div class="chartbox"><canvas id="merchantChart"></canvas></div><div class="notice">Tap a bar to see the underlying transactions.</div></div>
-  <div class="card"><h3>Spending by Source</h3><div class="chartbox"><canvas id="sourceChart"></canvas></div><div class="notice">Useful for seeing which card/account is carrying the spending.</div></div>
+  <div class="card"><h3>Top Merchants</h3><div class="chartbox" id="merchantChart"></div></div>
+  <div class="card"><h3>Spending by Source</h3><div class="chartbox" id="sourceChart"></div></div>
 </div>
 <div class="card drill">
-  <div class="drill-head"><div><h3 id="drillTitle" style="margin:0">Drill-down</h3><div class="notice" id="drillSub">Choose a chart segment, month, KPI, or category.</div></div><button class="btn" id="clearDrill">Clear</button></div>
-  <div class="statline"><div class="statmini"><span class="label">Transactions</span><b id="drillCount">0</b></div><div class="statmini"><span class="label">Total</span><b id="drillTotal">$0.00</b></div><div class="statmini"><span class="label">Average</span><b id="drillAvg">$0.00</b></div></div>
-  <div class="chips" id="drillChips"></div>
-  <div style="height:10px"></div>
-  <div class="tablewrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Source</th><th style="text-align:right">Amount</th></tr></thead><tbody id="drillBody"></tbody></table></div>
+ <div class="drill-head"><div><h3 id="drillTitle" style="margin:0">Drill-down</h3><div class="notice" id="drillSub">Tap a chart, KPI, merchant, source, or category.</div></div><button class="btn" id="clearDrill">Clear</button></div>
+ <div class="statline"><div class="statmini"><span class="label">Transactions</span><b id="drillCount">0</b></div><div class="statmini"><span class="label">Total</span><b id="drillTotal">$0.00</b></div><div class="statmini"><span class="label">Average</span><b id="drillAvg">$0.00</b></div></div>
+ <div class="tablewrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Source</th><th style="text-align:right">Amount</th></tr></thead><tbody id="drillBody"></tbody></table></div>
 </div>
 </section>
 
