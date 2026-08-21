@@ -1,6 +1,7 @@
 import { PublicClientApplication } from "https://cdn.jsdelivr.net/npm/@azure/msal-browser@5/+esm";
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.min.mjs";
 import JSZip from "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm";
+import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.5.0/+esm";
 pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.worker.min.mjs";
 
 const FOLDER_PATH = "Finance Dashboard/Statements";
@@ -8,6 +9,7 @@ const SCOPES = ["Files.Read"];
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const nav = [
  ["overview","Overview","Monthly financial snapshot"],
+ ["analytics","Analytics","Charts and interactive drill-downs"],
  ["transactions","Transactions","Normalized transactions"],
  ["shared","Shared Household","Shared living expenses and settlement"],
  ["review","Review","Items requiring confirmation"],
@@ -17,6 +19,9 @@ const nav = [
 
 let msal = null, account = null;
 let tx = JSON.parse(localStorage.getItem("finance.tx.v2") || "[]");
+let charts = {};
+let drillPredicate = null;
+let drillLabel = "";
 
 const $ = id => document.getElementById(id);
 const money = n => (n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -74,20 +79,100 @@ function normalizeDate(s){
 }
 function cleanDesc(s){return s.replace(/^POS Withdrawal - |^External Withdrawal - |^External Deposit - |^Deposit - /i,"").replace(/\s+- Card Ending In \d+$/i,"").trim()}
 function save(){localStorage.setItem("finance.tx.v2",JSON.stringify(tx));render()}
+function selectedMonthKey(){
+ const v=$("monthSelect")?.value||"";
+ const d=new Date(v+" 1");
+ return Number.isNaN(d.getTime())?null:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+function txForSelectedMonth(){
+ const key=selectedMonthKey();
+ return key?tx.filter(t=>String(t.date||"").startsWith(key)):tx;
+}
+function refreshMonthOptions(){
+ const keys=[...new Set(tx.map(t=>String(t.date||"").slice(0,7)).filter(x=>/^\d{4}-\d{2}$/.test(x)))].sort().reverse();
+ if(!keys.length)return;
+ const current=$("monthSelect").value;
+ $("monthSelect").innerHTML=keys.map(k=>{
+   const [y,m]=k.split("-").map(Number);
+   return `<option value="${new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"})}">${new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"})}</option>`;
+ }).join("");
+ if([...$("monthSelect").options].some(o=>o.value===current))$("monthSelect").value=current;
+}
 function render(){
- const expenses=tx.filter(t=>t.type==="Expense"), income=tx.filter(t=>t.type==="Income");
+ refreshMonthOptions();
+ const monthTx=txForSelectedMonth();
+ const expenses=monthTx.filter(t=>t.type==="Expense"), income=monthTx.filter(t=>t.type==="Income");
  const spend=expenses.reduce((a,t)=>a+Math.abs(t.amount),0), inc=income.reduce((a,t)=>a+Math.abs(t.amount),0), net=inc-spend;
  $("incomeKpi").textContent=money(inc);$("spendKpi").textContent=money(spend);$("netKpi").textContent=money(net);$("netKpi").className="big "+(net>=0?"good":"bad");$("rateKpi").textContent=(inc?net/inc*100:0).toFixed(1)+"%";
- const cats={};expenses.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));renderBars(cats);
- const q=($("search")?.value||"").toLowerCase(), f=$("filter")?.value||"";
- const rows=tx.filter(t=>(!q||(t.description+" "+t.category+" "+t.source).toLowerCase().includes(q))&&(!f||t.type===f)).sort((a,b)=>b.date.localeCompare(a.date));
+
+ const cats={};expenses.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));
+ renderOverviewCategoryChart(cats);
+ renderAnalyticsCharts();
+
+ const q=($("search")?.value||"").toLowerCase(), f=$("filter")?.value||"", cf=$("categoryFilter")?.value||"";
+ const rows=monthTx.filter(t=>(!q||(t.description+" "+t.category+" "+t.source).toLowerCase().includes(q))&&(!f||t.type===f)&&(!cf||t.category===cf)).sort((a,b)=>b.date.localeCompare(a.date));
  $("txBody").innerHTML=rows.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.description)}</td><td>${esc(t.category)}</td><td><span class="badge ${t.type.toLowerCase()}">${t.type}</span></td><td>${t.shared?'<span class="badge shared">Shared</span>':""}</td><td>${esc(t.source)}</td><td class="amount ${t.amount>0?"good":""}">${money(t.amount)}</td></tr>`).join("");
+
+ const categories=[...new Set(monthTx.map(t=>t.category).filter(Boolean))].sort();
+ const sel=$("categoryFilter"); if(sel){const old=sel.value;sel.innerHTML='<option value="">All categories</option>'+categories.map(c=>`<option>${esc(c)}</option>`).join("");if(categories.includes(old))sel.value=old}
+
  renderShared(expenses);renderReview();
+ if(drillPredicate)renderDrilldown();
 }
 function renderBars(cats){
  const arr=Object.entries(cats).sort((a,b)=>b[1]-a[1]);const max=Math.max(1,...arr.map(x=>x[1]));
  $("categoryBars").innerHTML=arr.length?arr.map(([n,v],i)=>`<div class="barrow"><span>${esc(n)}</span><div class="track"><div class="bar ${i===1?"gold":""}" style="width:${v/max*100}%"></div></div><b>${money(v)}</b></div>`).join(""):`<div class="notice">Import statements to populate this view.</div>`;
 }
+
+function chartDestroy(name){if(charts[name]){charts[name].destroy();delete charts[name]}}
+function chartColors(n){
+ const palette=["#5a3b73","#7a5a92","#9a7caf","#b69dc5","#d0bdd9","#68456e","#8b6b86","#ac8fa4","#c8aebc","#e0ccd5"];
+ return Array.from({length:n},(_,i)=>palette[i%palette.length]);
+}
+function renderOverviewCategoryChart(cats){
+ const el=$("overviewCategoryChart");if(!el)return;chartDestroy("overviewCategory");
+ const labels=Object.keys(cats), data=Object.values(cats);
+ if(!labels.length)return;
+ charts.overviewCategory=new Chart(el,{type:"doughnut",data:{labels,datasets:[{data,backgroundColor:chartColors(labels.length),borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const cat=labels[els[0].index];setDrill(`Category: ${cat}`,t=>t.type==="Expense"&&t.category===cat);show("analytics")}}}});
+}
+function monthlySeries(){
+ const buckets={};
+ tx.filter(t=>t.type==="Expense"||t.type==="Income").forEach(t=>{
+   const k=String(t.date||"").slice(0,7);if(!/^\d{4}-\d{2}$/.test(k))return;
+   buckets[k]??={income:0,spending:0};
+   if(t.type==="Income")buckets[k].income+=Math.abs(t.amount);else buckets[k].spending+=Math.abs(t.amount);
+ });
+ return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>{const[y,m]=k.split("-").map(Number);return{key:k,label:new Date(y,m-1,1).toLocaleString(undefined,{month:"short",year:"2-digit"}),...v}});
+}
+function renderAnalyticsCharts(){
+ const monthTx=txForSelectedMonth(), exp=monthTx.filter(t=>t.type==="Expense");
+
+ const series=monthlySeries(); chartDestroy("monthly");
+ if($("monthlyChart")&&series.length)charts.monthly=new Chart($("monthlyChart"),{type:"line",data:{labels:series.map(x=>x.label),datasets:[{label:"Income",data:series.map(x=>x.income),borderColor:"#5a3b73",backgroundColor:"#5a3b73",tension:.25},{label:"Spending",data:series.map(x=>x.spending),borderColor:"#b18a52",backgroundColor:"#b18a52",tension:.25}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const key=series[els[0].index].key;setDrill(`Month: ${series[els[0].index].label}`,t=>String(t.date||"").startsWith(key)&&(t.type==="Expense"||t.type==="Income"))}}}});
+
+ const cats={};exp.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));const catEntries=Object.entries(cats).sort((a,b)=>b[1]-a[1]);
+ chartDestroy("category");
+ if($("categoryChart")&&catEntries.length)charts.category=new Chart($("categoryChart"),{type:"doughnut",data:{labels:catEntries.map(x=>x[0]),datasets:[{data:catEntries.map(x=>x[1]),backgroundColor:chartColors(catEntries.length)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom"}},onClick:(e,els)=>{if(els.length){const cat=catEntries[els[0].index][0];setDrill(`Category: ${cat}`,t=>t.type==="Expense"&&t.category===cat&&txForSelectedMonth().includes(t))}}}});
+
+ const merchants={};exp.forEach(t=>merchants[t.description]=(merchants[t.description]||0)+Math.abs(t.amount));const merch=Object.entries(merchants).sort((a,b)=>b[1]-a[1]).slice(0,10).reverse();
+ chartDestroy("merchant");
+ if($("merchantChart")&&merch.length)charts.merchant=new Chart($("merchantChart"),{type:"bar",data:{labels:merch.map(x=>x[0]),datasets:[{label:"Spending",data:merch.map(x=>x[1]),backgroundColor:"#7a5a92"}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},onClick:(e,els)=>{if(els.length){const m=merch[els[0].index][0];setDrill(`Merchant: ${m}`,t=>t.type==="Expense"&&t.description===m&&txForSelectedMonth().includes(t))}}}});
+
+ const sources={};exp.forEach(t=>sources[t.source]=(sources[t.source]||0)+Math.abs(t.amount));const src=Object.entries(sources).sort((a,b)=>b[1]-a[1]);
+ chartDestroy("source");
+ if($("sourceChart")&&src.length)charts.source=new Chart($("sourceChart"),{type:"bar",data:{labels:src.map(x=>x[0]),datasets:[{label:"Spending",data:src.map(x=>x[1]),backgroundColor:chartColors(src.length)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},onClick:(e,els)=>{if(els.length){const s=src[els[0].index][0];setDrill(`Source: ${s}`,t=>t.type==="Expense"&&t.source===s&&txForSelectedMonth().includes(t))}}}});
+}
+function setDrill(label,predicate){drillLabel=label;drillPredicate=predicate;renderDrilldown()}
+function renderDrilldown(){
+ const rows=tx.filter(drillPredicate||(()=>false)).sort((a,b)=>b.date.localeCompare(a.date));
+ $("drillTitle").textContent=drillLabel||"Drill-down";$("drillSub").textContent=rows.length?"Underlying transactions for this selection.":"No matching transactions.";
+ const total=rows.reduce((a,t)=>a+Math.abs(t.amount),0);$("drillCount").textContent=rows.length;$("drillTotal").textContent=money(total);$("drillAvg").textContent=money(rows.length?total/rows.length:0);
+ const cats=[...new Set(rows.map(t=>t.category).filter(Boolean))].sort();
+ $("drillChips").innerHTML=cats.map(c=>`<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join("");
+ $("drillChips").querySelectorAll("button").forEach(b=>b.onclick=()=>{const cat=b.dataset.cat;const base=drillPredicate;setDrill(`${drillLabel.split(" • ")[0]} • ${cat}`,t=>base(t)&&t.category===cat)});
+ $("drillBody").innerHTML=rows.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.description)}</td><td>${esc(t.category)}</td><td>${esc(t.source)}</td><td class="amount">${money(t.amount)}</td></tr>`).join("");
+}
+
 function renderShared(expenses){
  const shared=expenses.filter(t=>t.shared),cats={};shared.forEach(t=>cats[t.category]=(cats[t.category]||0)+Math.abs(t.amount));
  const total=shared.reduce((a,t)=>a+Math.abs(t.amount),0); // V2 assumes imported statements are user's paid transactions.
@@ -375,7 +460,11 @@ async function syncAll(){
  $("syncAllBtn").disabled=false;$("syncBtn").disabled=false;
 }
 
-$("search").addEventListener("input",render);$("filter").addEventListener("change",render);
+$("search").addEventListener("input",render);$("filter").addEventListener("change",render);$("categoryFilter").addEventListener("change",render);$("monthSelect").addEventListener("change",render);
+$("clearDrill").onclick=()=>{drillPredicate=null;drillLabel="";$("drillTitle").textContent="Drill-down";$("drillSub").textContent="Choose a chart segment, month, KPI, or category.";$("drillBody").innerHTML="";$("drillCount").textContent="0";$("drillTotal").textContent="$0.00";$("drillAvg").textContent="$0.00";$("drillChips").innerHTML=""};
+$("incomeCard").onclick=()=>{const key=selectedMonthKey();setDrill("Income",t=>t.type==="Income"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
+$("spendCard").onclick=()=>{const key=selectedMonthKey();setDrill("Spending",t=>t.type==="Expense"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
+$("netCard").onclick=()=>{const key=selectedMonthKey();setDrill("Cash flow activity",t=>(t.type==="Income"||t.type==="Expense")&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
 $("signBtn").onclick=sign;$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};$("browseBtn").onclick=listDrive;$("syncAllBtn").onclick=syncAll;
 $("localBtn").onclick=()=>$("localPicker").click();$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
 $("saveConfig").onclick=()=>{const id=$("clientId").value.trim();localStorage.setItem("finance.clientId",id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
