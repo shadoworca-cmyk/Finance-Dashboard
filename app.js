@@ -1,4 +1,7 @@
 import { PublicClientApplication } from "https://cdn.jsdelivr.net/npm/@azure/msal-browser@5/+esm";
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.min.mjs";
+import JSZip from "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm";
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.worker.min.mjs";
 
 const FOLDER_PATH = "Finance Dashboard/Statements";
 const SCOPES = ["Files.Read"];
@@ -41,7 +44,7 @@ function classify(desc, amount, credit){
  const d=desc.toUpperCase();
  if(credit>0 && /PAYROLL|DIRECT DEP|SALARY/.test(d)) return ["Income","Income",false];
  if(credit>0 && !/TRANSFER FROM/.test(d)) return ["Other Income","Income",false];
- if(/TRANSFER (FROM|TO)|CHASE CREDIT|CAPITAL ONE|CREDIT CARD|VENMO|ZELLE/.test(d)) return ["Transfer","Transfer",false];
+ if(/TRANSFER (FROM|TO)|CHASE CREDIT|CAPITAL ONE|CREDIT CARD|VENMO|ZELLE|PAYPAL/.test(d)) return ["Transfer","Transfer",false];
  if(/COMCAST|XFINITY|INTERNET/.test(d)) return ["Internet","Expense",true];
  if(/PUD|ELECTRIC|POWER|UTILITY/.test(d)) return ["Power","Expense",true];
  if(/FRED MEYER|SAFEWAY|QFC|COSTCO|GROCERY|INSTACART/.test(d)) return ["Groceries","Expense",true];
@@ -136,7 +139,7 @@ async function initMsal(){
  updateAuthUI();
 }
 function updateAuthUI(){
- $("signBtn").textContent=account?"Disconnect":"Connect Microsoft";$("syncBtn").disabled=!account;$("browseBtn").disabled=!account;
+ $("signBtn").textContent=account?"Disconnect":"Connect Microsoft";$("syncBtn").disabled=!account;$("browseBtn").disabled=!account;if($("syncAllBtn"))$("syncAllBtn").disabled=!account;
  $("connectionStatus").className="status "+(account?"ok":"warn");$("connectionStatus").innerHTML=account?`Connected as <b>${esc(account.username||account.name||"Microsoft account")}</b>.`:"Not connected to OneDrive yet.";
 }
 async function sign(){
@@ -201,7 +204,7 @@ async function listDrive(){
  try{
   const url=`${GRAPH}/me/drive/root:/${encPath(FOLDER_PATH)}:/children?$select=id,name,size,file,folder,lastModifiedDateTime`;
   const data=await (await graph(url)).json();
-  const files=data.value.filter(x=>x.file);renderDriveFiles(files);$("recentFiles").innerHTML=files.slice(0,5).map(fileCard).join("");
+  const files=data.value.filter(x=>x.file);window.__driveFiles=files;renderDriveFiles(files);$("syncAllBtn").disabled=false;$("recentFiles").innerHTML=files.slice(0,5).map(fileCard).join("");
   $("connectionStatus").className="status ok";$("connectionStatus").innerHTML=`Found <b>${files.length}</b> file${files.length===1?"":"s"} in ${FOLDER_PATH}.`;
  }catch(e){
   $("driveFiles").innerHTML=`<div class="status bad"><b>Could not read the statements folder.</b><br>${esc(e.message)}<br><br>Confirm that the folder exists exactly as <b>${FOLDER_PATH}</b>.</div>`;
@@ -216,26 +219,164 @@ async function importDriveFile(id,name,button){
  button.disabled=true;button.textContent="Importing…";
  try{
   const res=await graph(`${GRAPH}/me/drive/items/${encodeURIComponent(id)}/content`);
-  const blob=await res.blob();await processFile(name,blob);
-  button.textContent="Imported";
+  const blob=await res.blob();const rows=await processFile(name,blob);
+  button.textContent=`Imported ${rows}`;
  }catch(e){button.textContent="Failed";alert(`Import failed: ${e.message}`)}
 }
+
+async function pdfToLines(blob){
+ const data=new Uint8Array(await blob.arrayBuffer());
+ const pdf=await pdfjsLib.getDocument({data}).promise;
+ const lines=[];
+ for(let p=1;p<=pdf.numPages;p++){
+  const page=await pdf.getPage(p);
+  const content=await page.getTextContent();
+  const grouped=new Map();
+  for(const item of content.items){
+   const y=Math.round(item.transform?.[5]||0);
+   if(!grouped.has(y))grouped.set(y,[]);
+   grouped.get(y).push({x:item.transform?.[4]||0,s:item.str});
+  }
+  [...grouped.entries()].sort((a,b)=>b[0]-a[0]).forEach(([,items])=>{
+   const line=items.sort((a,b)=>a.x-b.x).map(x=>x.s).join(" ").replace(/\s+/g," ").trim();
+   if(line)lines.push(line);
+  });
+ }
+ return lines;
+}
+function addTx({date,description,amount,source,category=null,type=null,shared=null,confidence="auto"}){
+ if(!date||!description||!Number.isFinite(amount))return false;
+ const inferred=classify(description,amount,amount>0?amount:0);
+ category=category||inferred[0];type=type||inferred[1];shared=shared??inferred[2];
+ const key=[date,description.toUpperCase().replace(/\s+/g," "),amount.toFixed(2),source].join("|");
+ if(tx.some(t=>t.key===key))return false;
+ tx.push({key,date,description:cleanDesc(description),category,type,shared,amount,source,confidence});
+ return true;
+}
+function inferYear(lines){
+ const joined=lines.slice(0,120).join(" ");
+ const m=joined.match(/(?:Statement Date:?\s*|Statement Period.*?)(?:\w+\s+\d{1,2},\s*)?(20\d{2})/i) || joined.match(/\b(20\d{2})\b/);
+ return m?Number(m[1]):new Date().getFullYear();
+}
+function importCreditCardLines(lines,source){
+ const year=inferYear(lines);let count=0;
+ const isChase=/CHASE/i.test(source)||lines.some(x=>/Manage your account online.*chase/i.test(x));
+ const isCapital=/CAPITAL\s*ONE/i.test(source)||lines.some(x=>/Capital One/i.test(x));
+ for(const line of lines){
+  let m=line.match(/^(\d{2})\/(\d{2})\s+(.+?)\s+(-?\$?[\d,]+\.\d{2})(?:\s+[\d,]+)?$/);
+  if(!m)continue;
+  const date=`${year}-${m[1]}-${m[2]}`;
+  let desc=m[3].trim(), raw=parseNum(m[4]), amount=-Math.abs(raw);
+  if(/PAYMENT|CREDIT|REFUND|REDEMPTION/i.test(desc)) amount=Math.abs(raw);
+  let type="Expense", category=null, shared=null;
+  if(/PAYMENT|AUTOMATIC PAYMENT/i.test(desc)){type="Transfer";category="Transfer";shared=false}
+  else if(/CREDIT|REFUND|REDEMPTION/i.test(desc)){type="Transfer";category="Credit / Refund";shared=false}
+  else if(/INTEREST CHARGE/i.test(desc)){type="Expense";category="Interest";shared=false}
+  if(addTx({date,description:desc,amount,source,category,type,shared,confidence:"statement"}))count++;
+ }
+ return count;
+}
+function importPayPalLines(lines,source){
+ let count=0,current=null;
+ const flush=()=>{
+  if(!current)return;
+  const desc=current.parts.join(" ").replace(/\s+/g," ").replace(/\bUSD\b.*$/,"").trim();
+  const d=desc||"PayPal transaction";
+  let type=current.amount<0?"Expense":"Income", category=null, shared=null;
+  if(/General Credit Card Deposit|Bank Deposit|Transfer|Add Money|Withdrawal/i.test(d)){type="Transfer";category="Transfer";shared=false}
+  else if(/Mobile Payment/i.test(d)&&current.amount>0){type="Income";category="Reimbursement / Payment";shared=false}
+  if(addTx({date:current.date,description:d,amount:current.amount,source,category,type,shared,confidence:"statement"}))count++;
+  current=null;
+ };
+ for(const line of lines){
+  const m=line.match(/^(\d{2})\/(\d{2})\/(20\d{2})\s+(.+?)\s+USD\s+(-?[\d,]+\.\d{2})\s+[-\d,.]+\s+(-?[\d,]+\.\d{2})/);
+  if(m){
+   flush();
+   current={date:`${m[3]}-${m[1]}-${m[2]}`,amount:parseNum(m[6]),parts:[m[4]]};
+  }else if(current && !/^(ID:|Ref ID:|USD$|Page \d+|PAYPAL ACCOUNT|ACCOUNT ACTIVITY|DATE )/i.test(line)){
+   if(!/Boeing Empl CU|PayPal Balance/i.test(line))current.parts.push(line.trim());
+  }
+ }
+ flush();return count;
+}
+function importAmazonCSV(text,source){
+ const rows=parseCSV(text);let count=0;
+ if(!rows.length)return 0;
+ const headers=Object.keys(rows[0]);
+ const pick=(r,names)=>{for(const n of names){const k=headers.find(h=>h.toLowerCase()===n.toLowerCase()||h.toLowerCase().includes(n.toLowerCase()));if(k&&r[k])return r[k]}return""};
+ for(const r of rows){
+  const dateRaw=pick(r,["Order Date","Purchase Date","Date"]);
+  const title=pick(r,["Product Name","Title","Item","Description"]);
+  const totalRaw=pick(r,["Total Owed","Item Total","Order Total","Total","Amount"]);
+  if(!dateRaw||!title||!totalRaw)continue;
+  const d=new Date(dateRaw), date=Number.isNaN(d.getTime())?dateRaw:d.toISOString().slice(0,10);
+  const amount=-Math.abs(parseNum(totalRaw));
+  // Amazon export is detail/enrichment. Keep out of spending totals to avoid double-counting card statement charges.
+  if(addTx({date,description:`Amazon detail: ${title}`,amount,source,category:"Amazon Purchase Detail",type:"Detail",shared:false,confidence:"detail"}))count++;
+ }
+ return count;
+}
+async function importPDF(blob,name){
+ const lines=await pdfToLines(blob);
+ if(/paypal/i.test(name)||lines.some(x=>/PAYPAL ACCOUNT/i.test(x)))return importPayPalLines(lines,name);
+ return importCreditCardLines(lines,name);
+}
+async function importZIP(blob,name){
+ const zip=await JSZip.loadAsync(await blob.arrayBuffer());let count=0;
+ for(const [entryName,entry] of Object.entries(zip.files)){
+  if(entry.dir)continue;
+  if(entryName.toLowerCase().endsWith(".pdf")){
+   const bytes=await entry.async("uint8array");
+   count+=await importPDF(new Blob([bytes],{type:"application/pdf"}),`${name} / ${entryName}`);
+  }else if(entryName.toLowerCase().endsWith(".csv")){
+   const text=await entry.async("string");
+   count+=/amazon/i.test(entryName)?importAmazonCSV(text,`${name} / ${entryName}`):importBECU(text,`${name} / ${entryName}`);
+  }
+ }
+ save();return count;
+}
+
 async function processFile(name,blob){
- const lower=name.toLowerCase();
+ const lower=name.toLowerCase();let rows=0;
  if(lower.endsWith(".csv")){
-  const text=await blob.text();const rows=importBECU(text,name);alert(`Imported ${rows} new transaction rows from ${name}.`);
- } else if(lower.endsWith(".pdf")){
-  addReviewPlaceholder(name,"PDF statement recognized. Chase/PayPal PDF transaction extraction is the next parser step.");
- } else if(lower.endsWith(".zip")){
-  addReviewPlaceholder(name,"ZIP statement archive recognized. PayPal ZIP extraction is the next parser step.");
- } else addReviewPlaceholder(name,"Unsupported statement format.");
+  const text=await blob.text();
+  rows=/amazon/i.test(name)?importAmazonCSV(text,name):importBECU(text,name);
+ }else if(lower.endsWith(".pdf")){
+  rows=await importPDF(blob,name);save();
+ }else if(lower.endsWith(".zip")){
+  rows=await importZIP(blob,name);
+ }else{
+  addReviewPlaceholder(name,"Unsupported statement format.");return 0;
+ }
+ return rows;
 }
 function addReviewPlaceholder(name,note){
  const key="placeholder|"+name;if(!tx.some(t=>t.key===key)){tx.push({key,date:new Date().toISOString().slice(0,10),description:name,category:"Needs Review",type:"Transfer",shared:false,amount:0,source:"Importer",confidence:"review",note});save()}
  alert(note);
 }
+
+async function syncAll(){
+ const files=window.__driveFiles||[];
+ if(!files.length){await listDrive();return}
+ $("syncAllBtn").disabled=true;$("syncBtn").disabled=true;
+ let imported=0,done=0,failed=0;
+ $("syncStatus").className="status";$("syncStatus").textContent=`Syncing ${files.length} statement files…`;
+ for(const f of files){
+  try{
+   if((f.size||0)===0){done++;continue}
+   const res=await graph(`${GRAPH}/me/drive/items/${encodeURIComponent(f.id)}/content`);
+   imported+=await processFile(f.name,await res.blob());done++;
+   $("syncStatus").textContent=`Processed ${done}/${files.length} files • ${imported} new rows`;
+  }catch(e){failed++;done++;console.error(f.name,e)}
+ }
+ save();
+ $("syncStatus").className="status "+(failed?"warn":"ok");
+ $("syncStatus").innerHTML=`<b>Sync complete.</b> ${done} files checked, ${imported} new rows imported${failed?`, ${failed} file(s) need review`:""}. Existing rows were skipped.`;
+ $("syncAllBtn").disabled=false;$("syncBtn").disabled=false;
+}
+
 $("search").addEventListener("input",render);$("filter").addEventListener("change",render);
-$("signBtn").onclick=sign;$("syncBtn").onclick=listDrive;$("browseBtn").onclick=listDrive;
+$("signBtn").onclick=sign;$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};$("browseBtn").onclick=listDrive;$("syncAllBtn").onclick=syncAll;
 $("localBtn").onclick=()=>$("localPicker").click();$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
 $("saveConfig").onclick=()=>{const id=$("clientId").value.trim();localStorage.setItem("finance.clientId",id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
 $("clearData").onclick=()=>{if(confirm("Clear locally cached imported transactions?")){tx=[];save()}};
