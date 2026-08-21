@@ -22,14 +22,31 @@ let tx = JSON.parse(localStorage.getItem("finance.tx.v2") || "[]");
 let charts = {};
 let drillPredicate = null;
 let drillLabel = "";
+function getClientId(){
+ return localStorage.getItem("finance.clientId") || localStorage.getItem("finance.clientId.backup") || "";
+}
+function setClientId(id){
+ setClientId(id);
+ localStorage.setItem("finance.clientId.backup",id);
+}
+
 
 const $ = id => document.getElementById(id);
+function safeEl(id){const el=$(id); if(!el) console.warn("Missing element:",id); return el;}
 const money = n => (n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 
 function buildNav(){
- for(const host of [$("sideNav"),$("mobileNav")]){
-  nav.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.dataset.tab=id;if(id==="overview")b.classList.add("active");b.onclick=()=>show(id);host.appendChild(b)})
+ const hosts=[$("sideNav"),$("mobileNav")].filter(Boolean);
+ for(const host of hosts){
+  host.innerHTML="";
+  nav.forEach(([id,label])=>{
+   const b=document.createElement("button");
+   b.textContent=label;b.dataset.tab=id;
+   if(id==="overview")b.classList.add("active");
+   b.onclick=()=>show(id);
+   host.appendChild(b);
+  });
  }
 }
 function show(id){
@@ -187,7 +204,7 @@ function renderReview(){
  $("reviewList").innerHTML=items.length?items.map(t=>`<div class="row"><div><b>${esc(t.description)}</b><div class="meta">${esc(t.date)} • ${esc(t.source)}</div></div><div><span class="badge review">Needs Review</span> &nbsp; <b>${money(t.amount)}</b></div></div>`).join(""):`<div class="notice">Nothing waiting for review.</div>`;
 }
 async function initMsal(){
- const clientId=localStorage.getItem("finance.clientId")||"";
+ const clientId=getClientId();
  $("clientId").value=clientId;
  $("redirectUri").textContent=location.href.split("#")[0].split("?")[0];
  if(!clientId)return;
@@ -460,13 +477,31 @@ async function syncAll(){
  $("syncAllBtn").disabled=false;$("syncBtn").disabled=false;
 }
 
-$("search").addEventListener("input",render);$("filter").addEventListener("change",render);$("categoryFilter").addEventListener("change",render);$("monthSelect").addEventListener("change",render);
-$("clearDrill").onclick=()=>{drillPredicate=null;drillLabel="";$("drillTitle").textContent="Drill-down";$("drillSub").textContent="Choose a chart segment, month, KPI, or category.";$("drillBody").innerHTML="";$("drillCount").textContent="0";$("drillTotal").textContent="$0.00";$("drillAvg").textContent="$0.00";$("drillChips").innerHTML=""};
-$("incomeCard").onclick=()=>{const key=selectedMonthKey();setDrill("Income",t=>t.type==="Income"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-$("spendCard").onclick=()=>{const key=selectedMonthKey();setDrill("Spending",t=>t.type==="Expense"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-$("netCard").onclick=()=>{const key=selectedMonthKey();setDrill("Cash flow activity",t=>(t.type==="Income"||t.type==="Expense")&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
-$("signBtn").onclick=sign;$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};$("browseBtn").onclick=listDrive;$("syncAllBtn").onclick=syncAll;
-$("localBtn").onclick=()=>$("localPicker").click();$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
-$("saveConfig").onclick=()=>{const id=$("clientId").value.trim();localStorage.setItem("finance.clientId",id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
-$("clearData").onclick=()=>{if(confirm("Clear locally cached imported transactions?")){tx=[];save()}};
-buildNav();render();await initMsal();
+$("search")?.addEventListener("input",render);$("filter")?.addEventListener("change",render);$("categoryFilter")?.addEventListener("change",render);$("monthSelect")?.addEventListener("change",render);
+if($("clearDrill"))$("clearDrill").onclick=()=>{drillPredicate=null;drillLabel="";$("drillTitle").textContent="Drill-down";$("drillSub").textContent="Choose a chart segment, month, KPI, or category.";$("drillBody").innerHTML="";$("drillCount").textContent="0";$("drillTotal").textContent="$0.00";$("drillAvg").textContent="$0.00";$("drillChips").innerHTML=""};
+if($("incomeCard"))$("incomeCard").onclick=()=>{const key=selectedMonthKey();setDrill("Income",t=>t.type==="Income"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
+if($("spendCard"))$("spendCard").onclick=()=>{const key=selectedMonthKey();setDrill("Spending",t=>t.type==="Expense"&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
+if($("netCard"))$("netCard").onclick=()=>{const key=selectedMonthKey();setDrill("Cash flow activity",t=>(t.type==="Income"||t.type==="Expense")&&(!key||String(t.date||"").startsWith(key)));show("analytics")};
+if($("signBtn"))$("signBtn").onclick=sign;if($("syncBtn"))$("syncBtn").onclick=async()=>{await listDrive();await syncAll()};if($("browseBtn"))$("browseBtn").onclick=listDrive;if($("syncAllBtn"))$("syncAllBtn").onclick=syncAll;
+if($("localBtn"))$("localBtn").onclick=()=>$("localPicker").click();if($("localPicker"))$("localPicker").onchange=async e=>{for(const f of e.target.files)await processFile(f.name,f)};
+if($("saveConfig"))$("saveConfig").onclick=()=>{const id=$("clientId").value.trim();setClientId(id);alert("Saved. Reloading the app so Microsoft authentication can initialize.");location.reload()};
+if($("clearData"))$("clearData").onclick=()=>{if(confirm("Clear locally cached imported transactions?")){tx=[];save()}};
+
+
+async function startApp(){
+ try{
+   buildNav();
+   render();
+   await initMsal();
+ }catch(e){
+   console.error("Finance Dashboard startup failed",e);
+   const box=$("fatalError");
+   if(box){
+     box.style.display="block";
+     box.innerHTML=`<b>Dashboard startup error.</b><br>${esc(e?.message||String(e))}`;
+   }
+   // Ensure navigation still exists even if auth/chart initialization fails.
+   try{buildNav()}catch{}
+ }
+}
+startApp();
