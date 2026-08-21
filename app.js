@@ -77,19 +77,37 @@ function normalizeDate(s){
 function cleanDesc(s){return s.replace(/^POS Withdrawal - |^External Withdrawal - |^External Deposit - |^Deposit - /i,"").replace(/\s+- Card Ending In \d+$/i,"").trim()}
 function save(){localStorage.setItem("finance.tx.v2",JSON.stringify(tx));render()}
 function selectedMonthKey(){
- const v=$("monthSelect")?.value||"";
- const d=new Date(v+" 1");
+ const sel=$("monthSelect");
+ const v=sel?.value||"";
+ if(/^\d{4}-\d{2}$/.test(v))return v;
+ const d=new Date(`1 ${v}`);
  return Number.isNaN(d.getTime())?null:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
 }
+function monthLabelFromKey(key){
+ if(!key)return "All available dates";
+ const [y,m]=key.split("-").map(Number);
+ return new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"});
+}
+function periodRangeLabel(key){
+ if(!key)return "All available dates";
+ const [y,m]=key.split("-").map(Number);
+ const first=new Date(y,m-1,1), last=new Date(y,m,0);
+ const mon=first.toLocaleString(undefined,{month:"short"});
+ return `${mon} ${first.getDate()}–${last.getDate()}, ${y}`;
+}
 function refreshMonthOptions(){
+ const sel=$("monthSelect");
+ if(!sel)return;
  const keys=[...new Set(tx.map(t=>String(t.date||"").slice(0,7)).filter(k=>/^\d{4}-\d{2}$/.test(k)))].sort().reverse();
  if(!keys.length)return;
- const current=$("monthSelect").value;
- $("monthSelect").innerHTML=keys.map(k=>{const[y,m]=k.split("-").map(Number);const label=new Date(y,m-1,1).toLocaleString(undefined,{month:"long",year:"numeric"});return `<option>${label}</option>`}).join("");
- if([...$("monthSelect").options].some(o=>o.value===current))$("monthSelect").value=current;
+ let current=selectedMonthKey();
+ if(!current||!keys.includes(current))current=keys[0];
+ sel.innerHTML=keys.map(k=>`<option value="${k}">${monthLabelFromKey(k)}</option>`).join("");
+ sel.value=current;
 }
 function monthTransactions(){
- const key=selectedMonthKey();return key?tx.filter(t=>String(t.date||"").startsWith(key)):tx;
+ const key=selectedMonthKey();
+ return key?tx.filter(t=>String(t.date||"").startsWith(key)):tx;
 }
 function render(){
  refreshMonthOptions();
@@ -97,6 +115,8 @@ function render(){
  const expenses=mt.filter(t=>t.type==="Expense"), income=mt.filter(t=>t.type==="Income");
  const spend=expenses.reduce((a,t)=>a+Math.abs(t.amount),0), inc=income.reduce((a,t)=>a+Math.abs(t.amount),0), net=inc-spend;
  $("incomeKpi").textContent=money(inc);$("spendKpi").textContent=money(spend);$("netKpi").textContent=money(net);$("netKpi").className="big "+(net>=0?"good":"bad");$("rateKpi").textContent=(inc?net/inc*100:0).toFixed(1)+"%";
+ const period=periodRangeLabel(selectedMonthKey());
+ ["incomePeriod","spendPeriod","netPeriod","ratePeriod","categoryPeriod","sharedPeriod","reviewPeriod"].forEach(id=>{if($(id))$(id).textContent=period});
  renderCharts(mt);
 
  const q=($("search")?.value||"").toLowerCase(), f=$("filter")?.value||"", cf=$("categoryFilter")?.value||"";
@@ -160,10 +180,61 @@ function renderShared(expenses){
  const html=rows.length?rows.map(([n,v])=>`<div class="row"><span>${esc(n)}</span><b>${money(v)}</b></div>`).join(""):`<div class="notice">No shared expenses loaded.</div>`;
  $("sharedRows").innerHTML=html;$("sharedDetail").innerHTML=html;$("settlement").textContent=total?`Partner share: ${money(partnerOwes)}`:"No shared expenses loaded";
 }
+
+function dayDiff(a,b){
+ const da=new Date(a+"T12:00:00"),db=new Date(b+"T12:00:00");
+ if(Number.isNaN(da.getTime())||Number.isNaN(db.getTime()))return 999;
+ return Math.abs((da-db)/86400000);
+}
+function isPayPalSource(t){return /paypal/i.test(String(t.source||""))}
+function isPayPalFundingCandidate(t){
+ if(isPayPalSource(t))return false;
+ const d=String(t.description||"").toUpperCase();
+ return t.confidence==="review" || t.category==="Needs Review" || /PAYPAL|PP\*|PYPL/.test(d);
+}
+function reconcileWithPayPal(){
+ const paypal=tx.filter(t=>isPayPalSource(t)&&t.type==="Expense"&&Math.abs(Number(t.amount)||0)>0);
+ let matched=0;
+ for(const item of tx){
+   if(!isPayPalFundingCandidate(item))continue;
+   if(item.paypalMatchKey)continue;
+
+   const amount=Math.abs(Number(item.amount)||0);
+   if(!amount)continue;
+
+   const candidates=paypal
+     .filter(p=>Math.abs(Math.abs(Number(p.amount)||0)-amount)<0.011 && dayDiff(item.date,p.date)<=4 && !p.fundingMatchKey)
+     .sort((a,b)=>dayDiff(item.date,a.date)-dayDiff(item.date,b.date));
+
+   if(candidates.length){
+     const p=candidates[0];
+     item.originalCategory=item.originalCategory||item.category;
+     item.originalType=item.originalType||item.type;
+     item.category="PayPal Funding";
+     item.type="Transfer";
+     item.shared=false;
+     item.confidence="paypal-matched";
+     item.paypalMatchKey=p.key;
+     item.matchNote=`Matched to PayPal: ${p.description}`;
+     p.fundingMatchKey=item.key;
+     p.confidence=p.confidence==="review"?"paypal-source":p.confidence;
+     matched++;
+   }
+ }
+ return matched;
+}
+
 function renderReview(){
- const items=tx.filter(t=>t.confidence==="review"||t.category==="Needs Review");
- $("reviewSummary").innerHTML=items.length?`<b>${items.length}</b> transaction${items.length===1?"":"s"} need categorization or matching.`:"No review items.";
- $("reviewList").innerHTML=items.length?items.map(t=>`<div class="row"><div><b>${esc(t.description)}</b><div class="meta">${esc(t.date)} • ${esc(t.source)}</div></div><div><span class="badge review">Needs Review</span> &nbsp; <b>${money(t.amount)}</b></div></div>`).join(""):`<div class="notice">Nothing waiting for review.</div>`;
+ reconcileWithPayPal();
+ const mt=monthTransactions();
+ const items=mt.filter(t=>t.confidence==="review"||t.category==="Needs Review");
+ const paypalMatched=mt.filter(t=>t.confidence==="paypal-matched");
+ $("reviewSummary").innerHTML=items.length
+   ? `<b>${items.length}</b> transaction${items.length===1?"":"s"} still need review. ${paypalMatched.length?`<br><span class="good">${paypalMatched.length} item${paypalMatched.length===1?"":"s"} matched to PayPal first.</span>`:""}`
+   : `${paypalMatched.length?`<span class="good"><b>${paypalMatched.length}</b> item${paypalMatched.length===1?"":"s"} reconciled against PayPal. </span>`:""}No unresolved review items for this period.`;
+ $("reviewList").innerHTML=items.length
+   ? items.map(t=>`<div class="row"><div><b>${esc(t.description)}</b><div class="meta">${esc(t.date)} • ${esc(t.source)}</div></div><div><span class="badge review">Needs Review</span> &nbsp; <b>${money(t.amount)}</b></div></div>`).join("")
+   : `<div class="notice">Nothing unresolved for ${esc(monthLabelFromKey(selectedMonthKey()))}.</div>`;
 }
 async function initMsal(){
  const clientId=localStorage.getItem("finance.clientId")||"";
@@ -412,6 +483,8 @@ async function processFile(name,blob){
  }else{
   addReviewPlaceholder(name,"Unsupported statement format.");return 0;
  }
+ reconcileWithPayPal();
+ localStorage.setItem("finance.tx.v2",JSON.stringify(tx));
  return rows;
 }
 function addReviewPlaceholder(name,note){
