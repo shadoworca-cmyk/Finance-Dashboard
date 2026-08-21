@@ -25,6 +25,15 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 .legendchips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.legendchip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:750;cursor:pointer}
 .drill{margin-top:12px}.drill-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
 .statline{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0}.statmini{background:#f8fafb;border:1px solid var(--line);border-radius:12px;padding:11px}.statmini b{display:block;font-size:18px;margin-top:3px}
+.accountgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.accountcard{background:#fff;border:1px solid #e8e9ed;border-radius:15px;padding:15px}
+.accounthead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px}
+.accountname{font-weight:850;font-size:16px}.accounttype{font-size:10px;font-weight:800;color:#6b7280;text-transform:uppercase;letter-spacing:.04em}
+.metricgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.metric{background:#f8fafb;border:1px solid var(--line);border-radius:11px;padding:9px}.metric .label{font-size:10px}.metric b{display:block;margin-top:3px;font-size:16px}
+.balanceedit{display:flex;gap:7px;margin-top:10px}.balanceedit input{min-width:0;flex:1;border:1px solid var(--line);border-radius:9px;padding:8px 9px}
+.standardrow{display:grid;grid-template-columns:1fr 105px 1fr 90px;gap:8px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}.standardrow:last-child{border-bottom:0}
+.progress{height:8px;background:#edf0f3;border-radius:999px;overflow:hidden;margin-top:6px}.progress>span{display:block;height:100%;background:#76528b;border-radius:999px}
+@media(max-width:700px){.accountgrid{grid-template-columns:1fr}.standardrow{grid-template-columns:1fr 90px}.standardrow .company{grid-column:1/2}.standardrow .statuscol{grid-column:2/3;grid-row:1/3}}
 .househero{padding:14px;border-radius:14px;background:#f5f9fc;border:1px solid #d9e7f1}.househero strong{display:block;font-size:23px;margin-top:4px}
 @media(max-width:950px){.app{grid-template-columns:1fr}.side{display:none}.mobile{display:flex;position:sticky;top:0;z-index:20;background:linear-gradient(90deg,#21102d 0%,#60447a 100%);padding:7px;gap:5px;overflow:auto}.mobile button{white-space:nowrap}.main{padding:16px 13px 42px}.grid4{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:620px){.grid4,.grid2{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.barrow{grid-template-columns:90px 1fr 65px}}
@@ -33,7 +42,7 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 <body>
 <div class="mobile" id="mobileNav"></div>
 <div class="app">
-<aside class="side"><div class="brand">Finance Dashboard<small>OneDrive-connected V4.3</small></div><div class="nav" id="sideNav"></div></aside>
+<aside class="side"><div class="brand">Finance Dashboard<small>OneDrive-connected V4.4</small></div><div class="nav" id="sideNav"></div></aside>
 <main class="main">
 <div class="top"><div><h1 id="title">Overview</h1><div class="sub" id="subtitle">Monthly financial snapshot</div></div><div class="actions"><select id="monthSelect" class="btn"><option>August 2026</option></select><button class="btn" id="syncBtn" disabled>Sync OneDrive</button><button class="btn primary" id="signBtn">Connect Microsoft</button></div></div>
 
@@ -44,18 +53,26 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 <div class="card clickable" id="netCard"><div class="label">Net Retained</div><div class="big good" id="netKpi">$0.00</div><div class="meta">Income minus expenses</div><span class="period" id="netPeriod">Selected month</span></div>
 <div class="card"><div class="label">Savings Rate</div><div class="big" id="rateKpi">0.0%</div><div class="meta">Based on net retained</div><span class="period" id="ratePeriod">Selected month</span></div>
 </div>
-<div class="grid2"><div class="card"><h3>Spending by Category</h3><span class="period" id="categoryPeriod">Selected month</span><div class="chartbox" id="overviewCategoryChart"></div><div class="legendchips" id="overviewLegend"></div><div class="notice">Tap a segment or category to drill down.</div></div><div class="card"><h3>Data Status</h3><div id="connectionStatus" class="status warn">Not connected to OneDrive yet.</div><div class="filelist" id="recentFiles"></div></div></div>
+<div class="grid2"><div class="card"><h3>Spend by Category Group</h3><span class="period" id="categoryPeriod">Selected month</span><div class="chartbox" id="overviewCategoryChart"></div><div class="legendchips" id="overviewLegend"></div><div class="notice">Tap a segment or category to drill down.</div></div><div class="card"><h3>Data Status</h3><div id="connectionStatus" class="status warn">Not connected to OneDrive yet.</div><div class="filelist" id="recentFiles"></div></div></div>
 <div class="grid2"><div class="card"><h3>Shared Household</h3><span class="period" id="sharedPeriod">Selected month</span><div id="sharedRows"></div><div class="househero"><span class="label">Settlement</span><strong id="settlement">No shared expenses loaded</strong><div class="notice">Reimbursements are transfers, not income or expense.</div></div></div><div class="card"><h3>Needs Attention</h3><span class="period" id="reviewPeriod">Selected month</span><div id="reviewSummary" class="status">No transactions loaded.</div></div></div>
 </section>
 
 <section class="tab" id="analytics">
 <div class="grid2">
   <div class="card"><h3>Income vs Spending by Month</h3><div class="chartbox" id="monthlyChart"></div><div class="notice">Tap a month to drill into that month's activity.</div></div>
-  <div class="card"><h3>Spending Mix</h3><div class="chartbox" id="categoryChart"></div><div class="legendchips" id="categoryLegend"></div></div>
+  <div class="card"><h3>Spend by Category Group</h3><div class="chartbox" id="categoryChart"></div><div class="legendchips" id="categoryLegend"></div></div>
 </div>
 <div class="grid2">
+  <div class="card"><h3>Spend by Subcategory</h3><div class="chartbox" id="subcategoryChart"></div></div>
   <div class="card"><h3>Top Merchants</h3><div class="chartbox" id="merchantChart"></div></div>
-  <div class="card"><h3>Spending by Source</h3><div class="chartbox" id="sourceChart"></div></div>
+</div>
+<div class="grid2">
+  <div class="card"><h3>Spending by Account / Source</h3><div class="chartbox" id="sourceChart"></div></div>
+  <div class="card"><h3>Shared Standard vs Actual</h3><div id="sharedStandardMini"></div></div>
+</div>
+<div class="grid2" style="display:none">
+  <div class="card"><h3>Top Merchants</h3><div class="chartbox" id="merchantChart"></div></div>
+  <div class="card"></div>
 </div>
 <div class="card drill">
  <div class="drill-head"><div><h3 id="drillTitle" style="margin:0">Drill-down</h3><div class="notice" id="drillSub">Tap a chart, KPI, merchant, source, or category.</div></div><button class="btn" id="clearDrill">Clear</button></div>
@@ -64,17 +81,32 @@ button,input,select{font:inherit}.app{display:grid;grid-template-columns:245px m
 </div>
 </section>
 
+
+<section class="tab" id="accounts">
+<div class="grid2">
+  <div class="card"><h3>Account Status</h3><p class="notice">Credit-card balances and limits are read from statement PDFs when available. CSV exports that do not include a balance show monthly activity; you can enter a current balance manually and it will stay in this browser.</p></div>
+  <div class="card"><h3>Portfolio Snapshot</h3><div id="accountTotals"></div></div>
+</div>
+<div class="accountgrid" id="accountCards" style="margin-top:12px"></div>
+</section>
+
 <section class="tab" id="transactions">
 <div class="toolbar"><input id="search" placeholder="Search merchant, category, source"><select id="categoryFilter"><option value="">All categories</option></select><select id="filter"><option value="">All types</option><option>Expense</option><option>Income</option><option>Transfer</option><option>Detail</option></select></div>
 <div class="tablewrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th>Shared</th><th>Source</th><th style="text-align:right">Amount</th></tr></thead><tbody id="txBody"></tbody></table></div>
 </section>
 
-<section class="tab" id="shared"><div class="grid2"><div class="card"><h3>Shared Household</h3><span class="period" id="sharedPeriod">Selected month</span><div class="notice">V2 recognizes shared categories for rent, renters insurance, internet, power, and groceries. The default split is 50/50.</div><div id="sharedDetail"></div></div><div class="card"><h3>Rules</h3><div class="row"><span>Rent</span><span class="badge shared">50/50</span></div><div class="row"><span>Renters Insurance</span><span class="badge shared">50/50</span></div><div class="row"><span>Internet</span><span class="badge shared">50/50</span></div><div class="row"><span>Power</span><span class="badge shared">50/50</span></div><div class="row"><span>Groceries</span><span class="badge shared">50/50</span></div></div></div></section>
+<section class="tab" id="shared">
+<div class="grid2">
+ <div class="card"><h3>Shared Household — Actual</h3><span class="period" id="sharedTabPeriod">Selected month</span><div class="notice">Actual shared transactions imported from your statements.</div><div id="sharedDetail"></div><div class="househero"><span class="label">Your imported shared spending</span><strong id="sharedActualTotal">$0.00</strong></div></div>
+ <div class="card"><h3>Monthly Standards</h3><p class="notice">These are the expected total household amounts. The app compares imported actuals against them. A standards file named <b>SharedExpenseStandards.csv</b> or <b>.xlsx</b> in the Statements folder can update this table.</p><div id="sharedStandards"></div><div class="househero"><span class="label">Standard household total</span><strong id="sharedStandardTotal">$0.00</strong></div></div>
+</div>
+<div class="card" style="margin-top:12px"><h3>Standard vs Actual</h3><div class="tablewrap"><table><thead><tr><th>Expense</th><th>Company</th><th style="text-align:right">Standard</th><th style="text-align:right">Actual</th><th style="text-align:right">Variance</th></tr></thead><tbody id="sharedCompareBody"></tbody></table></div></div>
+</section>
 
 <section class="tab" id="review"><div class="card"><h3>Review Queue</h3><p class="notice">Before an item appears here, the dashboard first tries to reconcile it against imported PayPal transactions by amount and nearby transaction date. A successful match keeps the PayPal merchant transaction as the expense and marks the bank/card line as PayPal funding so it is not double-counted.</p><div id="reviewList"></div></div></section>
 
 <section class="tab" id="onedrive">
-<div class="card"><h3>OneDrive Statements Folder</h3><p class="notice">Expected folder: <b>Finance Dashboard / Statements</b>. The app lists files through Microsoft Graph, downloads supported files directly to your browser, and processes them locally.</p><div class="actions"><button class="btn primary" id="browseBtn" disabled>Refresh Folder</button><button class="btn" id="syncAllBtn" disabled>Sync & Import All</button><button class="btn" id="localBtn">Import Local Files</button><input id="localPicker" type="file" accept=".csv,.pdf,.zip" multiple hidden></div><div id="syncStatus" class="status" style="margin-top:12px">Ready to scan your statement folder.</div><div class="filelist" id="driveFiles"></div></div>
+<div class="card"><h3>OneDrive Statements Folder</h3><p class="notice">Expected folder: <b>Finance Dashboard / Statements</b>. The app lists files through Microsoft Graph, downloads supported files directly to your browser, and processes them locally.</p><div class="actions"><button class="btn primary" id="browseBtn" disabled>Refresh Folder</button><button class="btn" id="syncAllBtn" disabled>Sync & Import All</button><button class="btn" id="localBtn">Import Local Files</button><input id="localPicker" type="file" accept=".csv,.pdf,.zip,.xlsx" multiple hidden></div><div id="syncStatus" class="status" style="margin-top:12px">Ready to scan your statement folder.</div><div class="filelist" id="driveFiles"></div></div>
 </section>
 
 <section class="tab" id="settings">
